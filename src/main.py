@@ -2,13 +2,18 @@ from collections import deque
 from random import randint
 from time import sleep
 
-import discord
 from discord.client import Client
 from google import genai
+from pydantic import BaseModel
 
 import config
 import logging_service
 import prompt_manager
+
+
+class Reply(BaseModel):
+    reply: str
+    is_bot_being_talked_to_percent: int
 
 
 class EspionageBot(Client):
@@ -17,58 +22,62 @@ class EspionageBot(Client):
         self.gemini_api_key = gemini_api_key
         self.discord_token = discord_token
         self.ai_client = None
-        self.message_history = {}
+        self.message_history = {
+            "intercepted": deque(maxlen=30),
+            "transmitted": deque(maxlen=30),
+        }
 
     async def on_ready(self):
         self.ai_client = genai.Client(api_key=self.gemini_api_key)
         print(f"Agent deployed as {self.user.name} (ID: {self.user.id})")
 
     async def on_message(self, message):
-        if message.author.id == self.user.id or not isinstance(
-            message.channel, discord.DMChannel
+        if (
+            message.author.id == self.user.id
+            or message.channel.id != 1308136461215858780
         ):
             return
 
-        user_id = message.author.id
-
-        if user_id not in self.message_history:
-            self.message_history[user_id] = {
-                "intercepted": deque(maxlen=10),
-                "transmitted": deque(maxlen=10),
-            }
-
-        agent_history = self.message_history[user_id]
+        author_name = message.author.display_name
+        formatted_message = f"{author_name}: {message.content}"
 
         operation_prompt = prompt_manager.create_prompt(
-            ",".join(agent_history["transmitted"]),
-            ",".join(agent_history["intercepted"]),
-            message.content,
+            ",".join(self.message_history["transmitted"]),
+            ",".join(self.message_history["intercepted"]),
+            formatted_message,
         )
 
-        print(operation_prompt)
-
         try:
-            async with message.channel.typing():
-                intel_response = self.ai_client.models.generate_content(
-                    model="gemini-2.0-flash", contents=operation_prompt
-                )
+            intel_response = self.ai_client.models.generate_content(
+                model="gemini-1.5-pro",
+                contents=operation_prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_schema": list[Reply],
+                },
+            )
 
-                if not intel_response.text:
+            if not intel_response:
+                return
+
+            parsed_response = intel_response.parsed
+
+            if isinstance(parsed_response, list) and parsed_response:
+                reply_obj = parsed_response[0]
+                if reply_obj.is_bot_being_talked_to_percent < 75:
                     return
+                reply_text = reply_obj.reply
+            else:
+                return
 
-                await logging_service.record_exchange(
-                    self, message.content, intel_response.text
-                )
+            sleep(randint(10, 60))
+            await message.channel.typing()
+            sleep(randint(3, 8))
+            await message.channel.send(reply_text)
+            await logging_service.record_exchange(self, message.content, reply_text)
 
-                sleep(randint(1, 3))
-
-            sleep(randint(2, 5))
-
-            await message.channel.send(intel_response.text)
-
-            agent_history["intercepted"].append(message.content)
-            agent_history["transmitted"].append(intel_response.text)
-
+            self.message_history["intercepted"].append(formatted_message)
+            self.message_history["transmitted"].append(f"You: {reply_text}")
         except Exception as e:
             print(f"Operation failure: {e}")
 

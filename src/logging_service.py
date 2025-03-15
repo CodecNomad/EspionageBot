@@ -13,9 +13,16 @@ async def record_exchange(bot, incoming: str, outgoing: str):
         return
 
     timestamp = datetime.datetime.now()
+    timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    timestamp_unix = int(timestamp.timestamp())
 
-    await secure_channel.send(
-        f"📅 {timestamp.strftime('%Y-%m-%d %H:%M:%S')} (<t:{int(timestamp.timestamp())}:R>)\n\n"
-        f"Target:\n{incoming}\n"
-        f"Agent:\n{outgoing}"
+    message = (
+        f"## 🔄 Exchange Log Entry\n\n"
+        f"**📅 Date & Time:**  {timestamp_str} (<t:{timestamp_unix}:R>)\n\n"
+        f"---  **Details**  ---\n\n"
+        f"🎯 **Target:**\n```\n{incoming}\n```\n"
+        f"👤 **Agent:**\n```\n{outgoing}\n```\n"
+        f"---"
     )
+
+    await secure_channel.send(message)
